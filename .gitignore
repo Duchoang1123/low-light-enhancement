@@ -3,3 +3,4 @@ pix2pix/logs
 pix2pix/night2day
 pix2pix/outputs
 pix2pix/training_checkpoints
+pix2pix/lol
