@@ -1,40 +1,21 @@
+def compute_psnr(target, gen_output):
+    mse = tf.reduce_mean(tf.square(target - gen_output))
+    max_pixel = 1.0  # Assuming pixel values are normalized to the range [0, 1]
+    psnr = 10 * tf.math.log(max_pixel ** 2 / mse) / tf.math.log(10.0)
+    return psnr
 
-def MRAE(original_img, denoised_img):
-    # Ensure images have the same shape
-    assert original_img.shape == denoised_img.shape, "Images must have the same dimensions"
 
-    # Compute MRAE
-    if original_img.ndim == 2:  # Grayscale image
-        mrae = np.mean(np.abs((original_img - denoised_img) / (original_img + 1e-8)))
-    elif original_img.ndim == 3:  # Color image (RGB)
-        mrae = np.mean(np.abs((original_img - denoised_img) / (original_img + 1e-8)))
-
+def compute_mrae(target, gen_output, epsilon=1e-10):
+    abs_diff = tf.abs(target - gen_output)
+    relative_abs_diff = abs_diff / (tf.abs(target) + epsilon)
+    mrae = tf.reduce_mean(relative_abs_diff)
     return mrae
 
 
-def RMSE(original_img, denoised_img):
-    # Ensure images have the same shape
-    assert original_img.shape == denoised_img.shape, "Images must have the same dimensions"
-
-    # Compute RMSE
-    if original_img.ndim == 2:  # Grayscale image
-        mse = np.mean((original_img - denoised_img) ** 2)
-        rmse = np.sqrt(mse)
-    elif original_img.ndim == 3:  # Color image (RGB)
-        mse = np.mean((original_img - denoised_img) ** 2, axis=(0, 1))
-        rmse = np.sqrt(np.mean(mse))
-
+def compute_rmse(target, gen_output):
+    mse = tf.reduce_mean(tf.square(target - gen_output))
+    rmse = tf.sqrt(mse)
     return rmse
-
-
-def PSNR(original, compressed):
-    mse = np.mean((original - compressed) ** 2)
-    if mse == 0:  # MSE is zero means no noise is present in the signal.
-        # Therefore PSNR has no importance.
-        return 100
-    max_pixel = 255.0
-    psnr = 20 * np.log10(max_pixel / np.sqrt(mse))
-    return psnr
 
 
 @tf.function
