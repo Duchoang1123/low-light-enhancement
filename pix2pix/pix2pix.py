@@ -15,12 +15,12 @@ Download the CMP Facade Database data (30MB). Additional datasets are available 
 """
 
 dataset_name = "night2day" #@param ["cityscapes", "edges2handbags", "edges2shoes", "facades", "maps", "night2day"]
-PATH = pathlib.Path('low-light-enhancement/pix2pix/night2day')
+PATH = pathlib.Path('low-light-enhancement/pix2pix/lol')
 
 
 """Each original image is of size `256 x 512` containing two `256 x 256` images:"""
 
-sample_image = tf.io.read_file(str(PATH / 'train/1_49_to_1.jpg'))
+sample_image = tf.io.read_file(str(PATH / 'train/combined_718.png'))
 sample_image = tf.io.decode_jpeg(sample_image)
 print(sample_image.shape)
 
@@ -53,7 +53,7 @@ def load(image_file):
 
 """Plot a sample of the input (architecture label image) and real (building facade photo) images:"""
 
-inp, re = load(str(PATH / 'train/1_49_to_1.jpg'))
+inp, re = load(str(PATH / 'train/combined_718.png'))
 # Casting to int for matplotlib to display the images
 # plt.figure()
 # plt.imshow(inp / 255.0)
@@ -144,16 +144,16 @@ def load_image_test(image_file):
 
 """## Build an input pipeline with `tf.data`"""
 
-train_dataset = tf.data.Dataset.list_files(str(PATH / 'train/*.jpg'))
+train_dataset = tf.data.Dataset.list_files(str(PATH / 'train/*.png'))
 train_dataset = train_dataset.map(load_image_train,
                                   num_parallel_calls=tf.data.AUTOTUNE)
 train_dataset = train_dataset.shuffle(BUFFER_SIZE)
 train_dataset = train_dataset.batch(BATCH_SIZE)
 
 try:
-  test_dataset = tf.data.Dataset.list_files(str(PATH / 'test/*.jpg'))
+  test_dataset = tf.data.Dataset.list_files(str(PATH / 'test/*.png'))
 except tf.errors.InvalidArgumentError:
-  test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.jpg'))
+  test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.png'))
 test_dataset = test_dataset.map(load_image_test)
 test_dataset = test_dataset.batch(BATCH_SIZE)
 
@@ -387,7 +387,7 @@ To learn more about the architecture and the hyperparameters you can refer to th
 generator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
 discriminator_optimizer = tf.keras.optimizers.Adam(2e-4, beta_1=0.5)
 
-checkpoint_dir = './training_checkpoints'
+checkpoint_dir = 'low-light-enhancement/pix2pix/training_checkpoints'
 checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
 checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  discriminator_optimizer=discriminator_optimizer,
@@ -407,7 +407,7 @@ Note: The `training=True` is intentional here since you want the batch statistic
 
 def generate_images(model, test_input, tar):
   prediction = model(test_input, training=True)
-  # plt.figure(figsize=(15, 15))
+  plt.figure(figsize=(15, 15))
 
   display_list = [test_input[0], tar[0], prediction[0]]
   title = ['Input Image', 'Ground Truth', 'Predicted Image']
@@ -435,7 +435,7 @@ for example_input, example_target in test_dataset.take(1):
 - Finally, log the losses to TensorBoard.
 """
 
-log_dir="logs/"
+log_dir="low-light-enhancement/pix2pix/logs/"
 
 summary_writer = tf.summary.create_file_writer(
   log_dir + "fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
