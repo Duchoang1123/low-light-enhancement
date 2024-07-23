@@ -38,7 +38,7 @@ def combine_images(low_light_path, high_light_path, output_path, target_size=(25
 for low_light_filename, high_light_filename in zip(low_light_images, high_light_images):
     low_light_path = os.path.join(low_light_dir, low_light_filename)
     high_light_path = os.path.join(high_light_dir, high_light_filename)
-    output_filename = f"combined_{low_light_filename}"
+    output_filename = f"{low_light_filename}"
     output_path = os.path.join(combined_dir, output_filename)
 
     combine_images(low_light_path, high_light_path, output_path)
