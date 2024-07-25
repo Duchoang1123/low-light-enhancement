@@ -151,9 +151,9 @@ train_dataset = train_dataset.shuffle(BUFFER_SIZE)
 train_dataset = train_dataset.batch(BATCH_SIZE)
 
 try:
-  test_dataset = tf.data.Dataset.list_files(str(PATH / 'test_resized/*.png'))
+  test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.jpg'))
 except tf.errors.InvalidArgumentError:
-  test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.png'))
+  test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.jpg'))
 test_dataset = test_dataset.map(load_image_test)
 test_dataset = test_dataset.batch(BATCH_SIZE)
 
@@ -485,6 +485,6 @@ def generate_save_images(model, test_input, tar, file_id):
 
 # Run the trained model on a few examples from the test set
 file_id = 0
-for inp, tar in test_dataset.take(5):
+for inp, tar in test_dataset.take(15):
   generate_save_images(generator, inp, tar, file_id)
   file_id += 1 
