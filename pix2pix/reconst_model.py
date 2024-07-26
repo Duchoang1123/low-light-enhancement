@@ -151,7 +151,7 @@ train_dataset = train_dataset.shuffle(BUFFER_SIZE)
 train_dataset = train_dataset.batch(BATCH_SIZE)
 
 try:
-  test_dataset = tf.data.Dataset.list_files(str(PATH / 'test_resized/*.png'))
+  test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.jpg'))
 except tf.errors.InvalidArgumentError:
   test_dataset = tf.data.Dataset.list_files(str(PATH / 'val/*.jpg'))
 test_dataset = test_dataset.map(load_image_test)
@@ -185,6 +185,8 @@ class ChannelAttention(tf.keras.layers.Layer):
     def call(self, inputs):
         avg_pool = tf.reduce_mean(inputs, axis=[1,2], keepdims=True)
         max_pool = tf.reduce_max(inputs, axis=[1,2], keepdims=True)
+        # avg_pool = tf.expand_dims(tf.expand_dims(avg_pool, 1), 1)
+        # max_pool = tf.expand_dims(tf.expand_dims(max_pool, 1), 1)
         
         avg_out = self.fc2(self.fc1(avg_pool))
         max_out = self.fc2(self.fc1(max_pool))
@@ -199,14 +201,12 @@ class SpatialAttention(tf.keras.layers.Layer):
     
     def build(self, input_shape):
         self.conv = tf.keras.layers.Conv2D(1, kernel_size=self.kernel_size, padding='same', activation='sigmoid')
-        self.act = tf.keras.layers.Activation('sigmoid')
     
     def call(self, inputs):
-        avg_pool = tf.reduce_mean(inputs, axis=[-1], keepdims=True) # Average Pooling
-        max_pool = tf.reduce_max(inputs, axis=[-1], keepdims=True) # Max Pooling
-        concat = tf.concat([avg_pool, max_pool], axis=-1) # Concatenate Pooled Features
-        conv = self.conv(concat) # Convolutional Layer with 7by7filter size
-        out = self.act(conv) # Sigmoid Activation
+        avg_pool = tf.reduce_mean(inputs, axis=[-1], keepdims=True)
+        max_pool = tf.reduce_max(inputs, axis=[-1], keepdims=True)
+        concat = tf.concat([avg_pool, max_pool], axis=-1)
+        out = self.conv(concat)
         return tf.keras.layers.Multiply()([inputs, out])
 
 class CBAM(tf.keras.layers.Layer):
@@ -294,7 +294,7 @@ def Generator():
     downsample(512, 4),  # (batch_size, 8, 8, 512)
     downsample(512, 4),  # (batch_size, 4, 4, 512)
     downsample(512, 4),  # (batch_size, 2, 2, 512)
-    downsample(512, 4, apply_cbam=False),  # (batch_size, 1, 1, 512)
+    downsample(512, 4),  # (batch_size, 1, 1, 512)
   ]
 
   up_stack = [
@@ -461,176 +461,6 @@ checkpoint = tf.train.Checkpoint(generator_optimizer=generator_optimizer,
                                  generator=generator,
                                  discriminator=discriminator)
 
-"""## Generate images
-
-Write a function to plot some images during training.
-
-- Pass images from the test set to the generator.
-- The generator will then translate the input image into the output.
-- The last step is to plot the predictions and _voila_!
-
-Note: The `training=True` is intentional here since you want the batch statistics, while running the model on the test dataset. If you use `training=False`, you get the accumulated statistics learned from the training dataset (which you don't want).
-"""
-
-def generate_images(model, test_input, tar):
-  prediction = model(test_input, training=True)
-  plt.figure(figsize=(15, 15))
-
-  display_list = [test_input[0], tar[0], prediction[0]]
-  title = ['Input Image', 'Ground Truth', 'Predicted Image']
-
-  for i in range(3):
-    plt.subplot(1, 3, i+1)
-    plt.title(title[i])
-    # Getting the pixel values in the [0, 1] range to plot.
-    plt.imshow(display_list[i] * 0.5 + 0.5)
-    plt.axis('off')
-  plt.savefig('low-light-enhancement/pix2pix/figresults/progress.png')
-  # plt.show()
-  plt.close()
-
-"""Test the function:"""
-
-for example_input, example_target in test_dataset.take(1):
-  generate_images(generator, example_input, example_target)
-
-"""## Training
-
-- For each example input generates an output.
-- The discriminator receives the `input_image` and the generated image as the first input. The second input is the `input_image` and the `target_image`.
-- Next, calculate the generator and the discriminator loss.
-- Then, calculate the gradients of loss with respect to both the generator and the discriminator variables(inputs) and apply those to the optimizer.
-- Finally, log the losses to TensorBoard.
-"""
-
-log_dir="low-light-enhancement/pix2pix/logs/"
-
-summary_writer = tf.summary.create_file_writer(
-  log_dir + "fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
-
-
-# define function for calculating measurements
-def compute_psnr(target, gen_output):
-    mse = tf.reduce_mean(tf.square(target - gen_output))
-    max_pixel = 1.0  # Assuming pixel values are normalized to the range [0, 1]
-    psnr = 10 * tf.math.log(max_pixel ** 2 / mse) / tf.math.log(10.0)
-    return psnr
-
-
-def compute_mrae(target, gen_output, epsilon=1e-10):
-    abs_diff = tf.abs(target - gen_output)
-    relative_abs_diff = abs_diff / (tf.abs(target) + epsilon)
-    mrae = tf.reduce_mean(relative_abs_diff)
-    return mrae
-
-
-def compute_rmse(target, gen_output):
-    mse = tf.reduce_mean(tf.square(target - gen_output))
-    rmse = tf.sqrt(mse)
-    return rmse
-
-
-@tf.function
-def train_step(input_image, target, step):
-  with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
-    gen_output = generator(input_image, training=True)
-
-    disc_real_output = discriminator([input_image, target], training=True)
-    disc_generated_output = discriminator([input_image, gen_output], training=True)
-
-    gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
-    disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
-
-  generator_gradients = gen_tape.gradient(gen_total_loss,
-                                          generator.trainable_variables)
-  discriminator_gradients = disc_tape.gradient(disc_loss,
-                                               discriminator.trainable_variables)
-
-  generator_optimizer.apply_gradients(zip(generator_gradients,
-                                          generator.trainable_variables))
-  discriminator_optimizer.apply_gradients(zip(discriminator_gradients,
-                                              discriminator.trainable_variables))
- 
-  # Calculate PSNR, RMSE, and MRAE
-  psnr_value = compute_psnr(target, gen_output)
-  rmse_value = compute_rmse(target, gen_output)
-  mrae_value = compute_mrae(target, gen_output)
-
-  with summary_writer.as_default():
-    tf.summary.scalar('gen_total_loss', gen_total_loss, step=step//100)
-    tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step//100)
-    tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=step//100)
-    tf.summary.scalar('disc_loss', disc_loss, step=step//100)
-    tf.summary.scalar('PSNR', psnr_value, step=step//100)
-    tf.summary.scalar('RMSE', rmse_value, step=step//100)
-    tf.summary.scalar('MRAE', mrae_value, step=step//100)
-
-"""The actual training loop. Since this tutorial can run of more than one dataset, and the datasets vary greatly in size the training loop is setup to work in steps instead of epochs.
-
-- Iterates over the number of steps.
-- Every 10 steps print a dot (`.`).
-- Every 1k steps: clear the display and run `generate_images` to show the progress.
-- Every 5k steps: save a checkpoint.
-"""
-
-def fit(train_ds, test_ds, steps):
-  example_input, example_target = next(iter(test_ds.take(1)))
-  start = time.time()
-
-  for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
-    if (step) % 100 == 0:
-      display.clear_output(wait=True)
-
-      if step != 0:
-        print(f'Time taken for 100 steps: {time.time()-start:.2f} sec\n')
-
-      start = time.time()
-
-      generate_images(generator, example_input, example_target)
-      print(f"Step: {step//100}00")
-
-    train_step(input_image, target, step)
-
-    # Training step
-    if (step+1) % 10 == 0:
-      print('.', end='', flush=True)
-
-
-    # Save (checkpoint) the model every 500 steps
-    if (step + 1) % 1000 == 0:
-      checkpoint.save(file_prefix=checkpoint_prefix)
-
-"""This training loop saves logs that you can view in TensorBoard to monitor the training progress.
-
-If you work on a local machine, you would launch a separate TensorBoard process. When working in a notebook, launch the viewer before starting the training to monitor with TensorBoard.
-
-Launch the TensorBoard viewer (Sorry, this doesn't
-display on tensorflow.org):
-"""
-
-# Commented out IPython magic to ensure Python compatibility.
-# %load_ext tensorboard
-# %tensorboard --logdir {log_dir}
-
-"""You can view the [results of a previous run](https://tensorboard.dev/experiment/lZ0C6FONROaUMfjYkVyJqw) of this notebook on [TensorBoard.dev](https://tensorboard.dev/).
-
-Finally, run the training loop:
-"""
-
-fit(train_dataset, test_dataset, steps=10000)
-
-"""Interpreting the logs is more subtle when training a GAN (or a cGAN like pix2pix) compared to a simple classification or regression model. Things to look for:
-
-- Check that neither the generator nor the discriminator model has "won". If either the `gen_gan_loss` or the `disc_loss` gets very low, it's an indicator that this model is dominating the other, and you are not successfully training the combined model.
-- The value `log(2) = 0.69` is a good reference point for these losses, as it indicates a perplexity of 2 - the discriminator is, on average, equally uncertain about the two options.
-- For the `disc_loss`, a value below `0.69` means the discriminator is doing better than random on the combined set of real and generated images.
-- For the `gen_gan_loss`, a value below `0.69` means the generator is doing better than random at fooling the discriminator.
-- As training progresses, the `gen_l1_loss` should go down.
-
-## Restore the latest checkpoint and test the network
-"""
-
-
 # Restoring the latest checkpoint in checkpoint_dir
 checkpoint.restore(tf.train.latest_checkpoint(checkpoint_dir))
 
@@ -655,6 +485,6 @@ def generate_save_images(model, test_input, tar, file_id):
 
 # Run the trained model on a few examples from the test set
 file_id = 0
-for inp, tar in test_dataset.take(5):
+for inp, tar in test_dataset.take(15):
   generate_save_images(generator, inp, tar, file_id)
   file_id += 1 
