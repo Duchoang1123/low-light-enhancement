@@ -1,0 +1,202 @@
+import os
+import cv2
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.utils import Sequence
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, Concatenate
+from tensorflow.keras.callbacks import Callback
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr, mean_squared_error as compare_mse
+from tensorflow.keras import backend as K
+
+data_dir = '/Users/h.chanid/Documents/DTU/Imaging processing/Project1/night2day/train'  # Replace with your dataset directory
+
+# Function to load and split images with a limit on the number of images
+def load_and_split_images(data_dir, limit=1000):
+    low_light_images = []
+    normal_images = []
+    count = 0
+    
+    for file_name in os.listdir(data_dir):
+        if file_name.endswith('.jpg'):  # Change the extension if necessary
+            image_path = os.path.join(data_dir, file_name)
+            image = cv2.imread(image_path)
+            
+            if image is None:
+                print(f"Failed to load image {image_path}")
+                continue
+            
+            height, width, _ = image.shape
+            mid_width = width // 2
+            
+            low_light_image = image[:, :mid_width, :]
+            normal_image = image[:, mid_width:, :]
+            
+            low_light_images.append(low_light_image)
+            normal_images.append(normal_image)
+            count += 1
+            
+            if count >= limit:
+                break
+    
+    return np.array(low_light_images), np.array(normal_images)
+
+# Data generator class
+class ImageDataGenerator(Sequence):
+    def __init__(self, data_dir, limit=5000, batch_size=32):
+        self.data_dir = data_dir
+        self.file_names = [f for f in os.listdir(data_dir) if f.endswith('.jpg')][:limit]
+        self.batch_size = batch_size
+        self.on_epoch_end()
+    
+    def __len__(self):
+        return len(self.file_names) // self.batch_size
+    
+    def __getitem__(self, index):
+        batch_file_names = self.file_names[index * self.batch_size:(index + 1) * self.batch_size]
+        low_light_images = []
+        normal_images = []
+        
+        for file_name in batch_file_names:
+            image_path = os.path.join(self.data_dir, file_name)
+            image = cv2.imread(image_path)
+            height, width, _ = image.shape
+            mid_width = width // 2
+            low_light_image = image[:, :mid_width, :]
+            normal_image = image[:, mid_width:, :]
+            low_light_images.append(low_light_image / 255.0)
+            normal_images.append(normal_image / 255.0)
+        
+        return np.array(low_light_images), np.array(normal_images)
+    
+    def on_epoch_end(self):
+        np.random.shuffle(self.file_names)
+
+# Custom callback to print PSNR, MRAE, and RMSE
+class MetricsCallback(Callback):
+    def __init__(self, validation_data, interval=1000):
+        self.validation_data = validation_data
+        self.interval = interval
+        self.batch_count = 0
+    
+    def on_batch_end(self, batch, logs=None):
+        self.batch_count += 1
+        if self.batch_count % self.interval == 0:
+            low_light_images, normal_images = self.validation_data
+            predictions = self.model.predict(low_light_images)
+            
+            psnr = np.mean([compare_psnr(normal, pred) for normal, pred in zip(normal_images, predictions)])
+            mse = np.mean([compare_mse(normal, pred) for normal, pred in zip(normal_images, predictions)])
+            rmse = np.sqrt(mse)
+            mrae = np.mean([np.abs(normal - pred) / (np.abs(normal) + 1e-6) for normal, pred in zip(normal_images, predictions)])
+            
+            print(f'Iteration {self.batch_count}: PSNR={psnr:.4f}, MRAE={mrae:.4f}, RMSE={rmse:.4f}')
+
+# Build the U-Net model
+def build_unet_model():
+    inputs = Input(shape=(None, None, 3))
+    
+    # Encoder
+    c1 = Conv2D(64, (3, 3), activation='relu', padding='same')(inputs)
+    p1 = MaxPooling2D((2, 2), padding='same')(c1)
+    c2 = Conv2D(128, (3, 3), activation='relu', padding='same')(p1)
+    p2 = MaxPooling2D((2, 2), padding='same')(c2)
+    c3 = Conv2D(256, (3, 3), activation='relu', padding='same')(p2)
+    p3 = MaxPooling2D((2, 2), padding='same')(c3)
+    c4 = Conv2D(512, (3, 3), activation='relu', padding='same')(p3)
+    p4 = MaxPooling2D((2, 2), padding='same')(c4)
+    
+    # Bottleneck
+    c5 = Conv2D(1024, (3, 3), activation='relu', padding='same')(p4)
+    
+    # Decoder
+    u6 = UpSampling2D((2, 2))(c5)
+    u6 = Concatenate()([u6, c4])
+    c6 = Conv2D(512, (3, 3), activation='relu', padding='same')(u6)
+    u7 = UpSampling2D((2, 2))(c6)
+    u7 = Concatenate()([u7, c3])
+    c7 = Conv2D(256, (3, 3), activation='relu', padding='same')(u7)
+    u8 = UpSampling2D((2, 2))(c7)
+    u8 = Concatenate()([u8, c2])
+    c8 = Conv2D(128, (3, 3), activation='relu', padding='same')(u8)
+    u9 = UpSampling2D((2, 2))(c8)
+    u9 = Concatenate()([u9, c1])
+    c9 = Conv2D(64, (3, 3), activation='relu', padding='same')(u9)
+    
+    outputs = Conv2D(3, (3, 3), activation='sigmoid', padding='same')(c9)
+    
+    model = Model(inputs, outputs)
+    return model
+
+# Load a small subset of data for initial testing
+try:
+    low_light_images, normal_images = load_and_split_images(data_dir, limit=1000)
+    print(f"Loaded {len(low_light_images)} low-light images and {len(normal_images)} normal images.")
+except Exception as e:
+    print(f"An error occurred: {e}")
+
+# Normalize images
+low_light_images = low_light_images / 255.0
+normal_images = normal_images / 255.0
+
+print("Data preprocessing completed successfully.")
+
+# Create data generators for training
+train_generator = ImageDataGenerator(data_dir, batch_size=16)
+
+# Build and compile the model
+model = build_unet_model()
+model.compile(optimizer='adam', loss='mean_squared_error')
+model.summary()
+
+# Train the model
+batch_size = 16
+epochs = 50
+
+metrics_callback = MetricsCallback(validation_data=(low_light_images, normal_images), interval=1000)
+
+history = model.fit(
+    train_generator,
+    steps_per_epoch=len(train_generator),
+    epochs=epochs,
+    callbacks=[metrics_callback]
+)
+
+# Save the model
+model.save('low_light_enhancement_model.h5')
+print("Model saved successfully.")
+
+# Evaluate the model (using the small subset of data)
+val_loss = model.evaluate(low_light_images, normal_images)
+print(f'Validation Loss: {val_loss}')
+
+# Predict and visualize the results
+import matplotlib.pyplot as plt
+
+def plot_comparison(low_light_img, enhanced_img, normal_img):
+    plt.figure(figsize=(15, 5))
+
+    plt.subplot(1, 3, 1)
+    plt.title('Low Light Image')
+    plt.imshow(low_light_img)
+
+    plt.subplot(1, 3, 2)
+    plt.title('Enhanced Image')
+    plt.imshow(enhanced_img)
+
+    plt.subplot(1, 3, 3)
+    plt.title('Normal Image')
+    plt.imshow(normal_img)
+
+    plt.show()
+
+# Get a random sample from the loaded small subset
+sample_idx = np.random.choice(len(low_light_images))
+low_light_sample = low_light_images[sample_idx]
+normal_sample = normal_images[sample_idx]
+
+# Predict the enhanced image
+enhanced_sample = model.predict(np.expand_dims(low_light_sample, axis=0))[0]
+
+# Plot the comparison
+plot_comparison(low_light_sample, enhanced_sample, normal_sample)
